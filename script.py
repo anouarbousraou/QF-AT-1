@@ -1,19 +1,10 @@
-"""
-Quantitative Finance & Algorithmic trading -  assignment A
-
-
-"""
-
-"""
-Q2.1
-"""
+# import packages
 import pandas as pd
 import statistics
 from statistics import geometric_mean
 import numpy as np
 from scipy import stats
 from numpy import NaN
-from sklearn.metrics import jaccard_score
 import statsmodels.api as sm
 import matplotlib.pyplot as plt
 import sys
@@ -27,11 +18,15 @@ def load_data(data, fund_style=False):
     if fund_style==True:
         return strategies
     else:
-        return df
+        return df.iloc[:,0:5]
 
+# read data
 hf_data = load_data("HedgeFund_Data.csv", fund_style=True)
-all_data = load_data("HedgeFund_Data.csv", fund_style=False)
+ff_factors_data = load_data("HedgeFund_Data.csv", fund_style=False)
 
+"""
+Q2.1
+"""
 ##A
 ann_arith_mean = hf_data.mean()*12
 print('***Annual arithmetic mean***', ann_arith_mean, sep='\n')
@@ -54,24 +49,34 @@ ann_volatility = hf_data.std()*12**.5
 print('***Annual volatility***', ann_volatility, sep='\n')
 
 ##D
-excess_returns = pd.DataFrame(index=all_data.index)
+
+# create empty dataframe with index mdate
+excess_returns = pd.DataFrame(index=ff_factors_data.index)
 for column in hf_data:
-    excess_returns[column] = hf_data[column] - all_data['Rf']
+    # compute excess returns per strategy
+    excess_returns[column] = hf_data[column] - ff_factors_data['Rf']
 
 ann_sharpe_ratio = excess_returns.mean()/excess_returns.std()*12**.5
 print('***Annual Sharpe Ratio***', ann_sharpe_ratio, sep='\n')
 
 ##E
-mkt_return = all_data['MktRf']
+mkt_return = ff_factors_data['MktRf']
 betas = []
 alphas = []
 for column in hf_data:
-    # x = market or x = strategy return?
-    regress_coefs = stats.linregress(mkt_return, hf_data[column])
-    beta = regress_coefs[0]
-    alpha = regress_coefs[1]
-    betas.append(beta)
+    # run regression for each hf strategy
+    X = mkt_return
+    Y = hf_data[column]
+    X = sm.add_constant(X)
+    model = sm.OLS(Y,X)
+    res1 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
+    # get constant
+    alpha = res1.params[0]
     alphas.append(alpha)
+    # get beta
+    beta = res1.params[1]
+    betas.append(beta)
+
 market_beta = pd.Series(betas, index=list(hf_data.columns))
 print('***Market betas***', market_beta, sep='\n')
 
@@ -84,15 +89,18 @@ print('***Annualized alpha to market***', ann_market_alpha, sep='\n')
 information_ratios = []
 
 for col in excess_returns:
+    # run regression based on excess returns
     Y = excess_returns[col].values
+    # market returns were already defined earlier
     X = mkt_return
     X = sm.add_constant(X)
     model = sm.OLS(Y, X)
-    results = model.fit()
-    alpha = results.params[0]
+    res2 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
+    alpha = res2.params[0]
     # get residuals, source: https://stackoverflow.com/questions/55095437/in-sklearn-regression-is-there-a-command-to-return-residuals-for-all-records
-    residuals = results.resid
+    residuals = res2.resid
     idio_sync_risk = residuals.std()
+    # calculate information ratio
     information_ratio = alpha/idio_sync_risk
     information_ratios.append(information_ratio)
 
@@ -153,21 +161,21 @@ Q2.3
 """
 
 ## 1st regression
-# don't know if we need to subtract rf from mktrf
 X = mkt_return
 Y = excess_returns["Long_Short"]
 X = sm.add_constant(X)
 model = sm.OLS(Y,X)
-results1 = model.fit()
+results1 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
 print('***Regression question 2.3A***', results1.summary(), sep='\n')
 
 ## 2nd regression
-factors = all_data.iloc[:, 0:4]
+factors = ff_factors_data
+
 X = factors
-X =  sm.add_constant(X)
+X = sm.add_constant(X)
 Y = excess_returns["Long_Short"]
 model = sm.OLS(Y,X)
-results2 = model.fit()
+results2 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
 print('***Regression question 2.3B***', results2.summary(), sep='\n')
 
 """
@@ -175,11 +183,11 @@ Q2.4
 """
 ## A
 X = mkt_return
-# no excess return for this?
+# do we need to run it on excess returns or regular returns?
 Y = hf_data['Convertible_Arb']
 X = sm.add_constant(X)
 model = sm.OLS(Y,X)
-results3 = model.fit()
+results3 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
 print('***Regression question 2.4A***', results3.summary(), sep='\n')
 
 ## B
@@ -203,27 +211,28 @@ for i in range(1, int((len(conv_arb.values)+3)/3)):
     quarterly_mkt_return = sum(mkt_return.values[start:end])
     quarterly_mkt_returns.append(quarterly_mkt_return)
 
-
 Y = quarterly_hf_returns
 X = quarterly_mkt_returns 
 X = sm.add_constant(X)
 model = sm.OLS(Y,X)
-results4 = model.fit()
+results4 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
 print('***Regression question 2.4B***', results4.summary(), sep='\n')
 
 ## C
-# lags
+# create new data frame
 market_returns = pd.DataFrame(mkt_return)
+# create lagged returns
 market_returns['One-lag'] = market_returns['MktRf'].shift(1)
 market_returns['Two-lag'] = market_returns['MktRf'].shift(2)
 
 # regression
 beta_sum = 0 
+# loop over different returns in market, from t to t-2 (lags)
 for column in market_returns:
-
     model = sm.OLS(market_returns[column].values, hf_data['Convertible_Arb'].values, missing='drop')
-    results5 = model.fit()
+    results5 = model.fit(cov_type='HAC', cov_kwds={'maxlags':11})
     beta = float(results5.params[0])
+    # add beta to sum of beta
     beta_sum += beta
 print("***Regression question 2.4C***")
 print(f"The sum of betas of the Convertible Bond Arbitrage strategy is: {round(beta_sum, 3)}")
